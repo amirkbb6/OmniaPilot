@@ -1,0 +1,13 @@
+{
+  "name": "@brandos/scripts",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "dependencies": {
+    "@prisma/client": "^5.11.0"
+  },
+  "scripts": {
+    "seed": "tsx seed.ts",
+    "export": "tsx export-org.ts"
+  }
+}

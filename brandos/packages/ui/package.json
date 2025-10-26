@@ -1,0 +1,9 @@
+{
+  "name": "@brandos/ui",
+  "private": true,
+  "version": "1.0.0",
+  "main": "src/index.ts",
+  "dependencies": {
+    "class-variance-authority": "^0.7.0"
+  }
+}

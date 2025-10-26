@@ -1,0 +1,40 @@
+{
+  "extends": "../../packages/config/tsconfig.base.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@/components/*": [
+        "./components/*"
+      ],
+      "@/lib/*": [
+        "./lib/*"
+      ],
+      "@brandos/schemas": [
+        "../../packages/schemas/index"
+      ],
+      "@brandos/ui": [
+        "../../packages/ui/src"
+      ],
+      "@brandos/config/*": [
+        "../../packages/config/*"
+      ],
+      "@/styles/*": [
+        "styles/*"
+      ]
+    },
+    "types": [
+      "node",
+      "jest",
+      "vitest/globals",
+      "@testing-library/jest-dom"
+    ]
+  },
+  "include": [
+    "next-env.d.ts",
+    "**/*.ts",
+    "**/*.tsx"
+  ],
+  "exclude": [
+    "node_modules"
+  ]
+}
