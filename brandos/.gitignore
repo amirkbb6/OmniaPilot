@@ -1,0 +1,8 @@
+node_modules
+.env*
+.prisma
+pnpm-lock.yaml
+.next
+playwright-report
+coverage
+.DS_Store

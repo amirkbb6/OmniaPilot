@@ -1,0 +1,9 @@
+{
+  "name": "@brandos/schemas",
+  "private": true,
+  "version": "1.0.0",
+  "main": "index.ts",
+  "dependencies": {
+    "zod": "^3.22.4"
+  }
+}

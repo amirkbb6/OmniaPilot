@@ -1,0 +1,27 @@
+{
+  "name": "brandos-monorepo",
+  "private": true,
+  "version": "1.0.0",
+  "license": "MIT",
+  "packageManager": "pnpm@8.15.1",
+  "scripts": {
+    "dev": "pnpm --filter web dev",
+    "build": "pnpm --filter web build",
+    "lint": "eslint .",
+    "test": "vitest",
+    "test:e2e": "playwright test",
+    "prepare": "husky install",
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:generate": "prisma generate",
+    "prisma:seed": "pnpm --filter scripts seed"
+  },
+  "lint-staged": {
+    "*.{ts,tsx,js,jsx,md}": [
+      "pnpm lint"
+    ]
+  },
+  "devDependencies": {
+    "prisma": "^5.11.0",
+    "tsx": "^4.7.2"
+  }
+}
