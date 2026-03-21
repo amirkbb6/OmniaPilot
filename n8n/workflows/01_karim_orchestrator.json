@@ -1,0 +1,184 @@
+{
+  "name": "01 — Karim Orchestrator (Event Router)",
+  "nodes": [
+    {
+      "id": "wh-supabase-events",
+      "name": "Webhook — Supabase Events",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [200, 380],
+      "webhookId": "karim-supabase-events",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "supabase-events",
+        "responseMode": "onReceived",
+        "responseData": "noData",
+        "options": {}
+      }
+    },
+    {
+      "id": "cron-omar",
+      "name": "Cron — Omar 23h00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [200, 560],
+      "parameters": {
+        "rule": {
+          "interval": [{ "field": "cronExpression", "expression": "0 23 * * *" }]
+        }
+      }
+    },
+    {
+      "id": "cron-alex-lundi",
+      "name": "Cron — Alex Lundi 08h00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [200, 720],
+      "parameters": {
+        "rule": {
+          "interval": [{ "field": "cronExpression", "expression": "0 8 * * 1" }]
+        }
+      }
+    },
+
+    {
+      "id": "code-route-event",
+      "name": "Code — Router Karim",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [480, 380],
+      "parameters": {
+        "jsCode": "// ============================================================\n// Karim Benali — Routeur déterministe. On route, on ne pense pas.\n// ============================================================\nconst body      = $input.item.json.body || $input.item.json;\nconst eventType = (body.type  || '').toUpperCase();\nconst table     = body.table  || '';\nconst record    = body.record     || {};\nconst oldRecord = body.old_record || {};\n\nconst targets = [];\n\n// ---- LEADS -------------------------------------------------\nif (table === 'leads') {\n  if (eventType === 'INSERT') {\n    targets.push({ agent: 'alex',  tier: 1, action: 'new_lead',\n      webhookPath: '/webhook/agent-alex',\n      payload: { trigger: 'lead_insert', lead: record } });\n  }\n  if (Number(record.score) >= 75) {\n    targets.push({ agent: 'julie', tier: 1, action: 'hot_lead_qualification',\n      webhookPath: '/webhook/agent-julie',\n      payload: { trigger: 'score_threshold', lead: record, score: record.score } });\n  }\n  if (record.status === 'signed' && oldRecord.status !== 'signed') {\n    targets.push({ agent: 'sarah', tier: 1, action: 'lead_signed_onboarding',\n      webhookPath: '/webhook/agent-sarah',\n      payload: { trigger: 'lead_signed', lead: record } });\n  }\n}\n\n// ---- PROJECTS ----------------------------------------------\nif (table === 'projects' && eventType === 'UPDATE' && record.status !== oldRecord.status) {\n  const s = record.status;\n  if (s === 'brief_completed') {\n    targets.push({ agent: 'salma', tier: 1, action: 'brief_completed_start_blueprint',\n      webhookPath: '/webhook/agent-salma',\n      payload: { trigger: 'brief_completed', project: record } });\n  }\n  if (s === 'blueprint_approved') {\n    targets.push({ agent: 'nabil', tier: 1, action: 'blueprint_approved_start_dev',\n      webhookPath: '/webhook/agent-nabil',\n      payload: { trigger: 'blueprint_approved', project: record } });\n    targets.push({ agent: 'lina',  tier: 1, action: 'blueprint_approved_start_design',\n      webhookPath: '/webhook/agent-lina',\n      payload: { trigger: 'blueprint_approved', project: record } });\n  }\n  if (s === 'copy_design_done') {\n    targets.push({ agent: 'yanis', tier: 1, action: 'copy_design_done_qa',\n      webhookPath: '/webhook/agent-yanis',\n      payload: { trigger: 'copy_design_done', project: record } });\n  }\n  if (s === 'preview_ready') {\n    targets.push({ agent: 'victor', tier: 1, action: 'preview_ready_delivery',\n      webhookPath: '/webhook/agent-victor',\n      payload: { trigger: 'preview_ready', project: record } });\n  }\n}\n\n// ---- INVOICES ----------------------------------------------\nif (table === 'invoices' && record.status === 'paid' && oldRecord.status !== 'paid') {\n  targets.push({ agent: 'amir', tier: 2, action: 'invoice_paid_notification',\n    webhookPath: '/webhook/agent-amir-notify',\n    payload: { trigger: 'invoice_paid', invoice: record } });\n}\n\n// ---- Aucun match -------------------------------------------\nif (targets.length === 0) {\n  return [{ json: {\n    _skip: true, _reason: 'no_routing_match',\n    table, eventType, recordStatus: record.status\n  }}];\n}\n\nreturn targets.map(t => ({ json: t }));\n"
+      }
+    },
+
+    {
+      "id": "code-prepare-omar",
+      "name": "Code — Prépare Omar",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [480, 560],
+      "parameters": {
+        "jsCode": "return [{ json: {\n  agent: 'omar', tier: 1, action: 'daily_report_23h',\n  webhookPath: '/webhook/agent-omar',\n  payload: { trigger: 'cron_23h00', timestamp: new Date().toISOString() }\n}}];\n"
+      }
+    },
+
+    {
+      "id": "code-prepare-alex-prospection",
+      "name": "Code — Prépare Alex Prospection",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [480, 720],
+      "parameters": {
+        "jsCode": "return [{ json: {\n  agent: 'alex', tier: 1, action: 'weekly_prospection_monday',\n  webhookPath: '/webhook/agent-alex',\n  payload: { trigger: 'cron_lundi_08h00', timestamp: new Date().toISOString() }\n}}];\n"
+      }
+    },
+
+    {
+      "id": "if-skip",
+      "name": "IF — Skip ?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [760, 380],
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "loose" },
+          "conditions": [{
+            "id": "cond-skip",
+            "leftValue": "={{ $json._skip }}",
+            "rightValue": true,
+            "operator": { "type": "boolean", "operation": "true" }
+          }],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+
+    {
+      "id": "no-op-skip",
+      "name": "No Op — Aucun Agent",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [1020, 300],
+      "parameters": {}
+    },
+
+    {
+      "id": "code-call-agent",
+      "name": "Code — Appel Agent + Contexte Log",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1020, 520],
+      "parameters": {
+        "jsCode": "// Appel HTTP de l'agent + construction du contexte pour agent_logs\nconst ctx = $input.item.json;\nconst N8N_BASE = $env['N8N_WEBHOOK_BASE_URL'] || 'http://localhost:5678';\nconst url = N8N_BASE + ctx.webhookPath;\n\nconst t0 = Date.now();\nlet httpStatus = 0;\nlet output = {};\n\ntry {\n  const resp = await $http.request({\n    method: 'POST',\n    url,\n    body: ctx.payload,\n    json: true,\n    timeout: 30000\n  });\n  httpStatus = resp.statusCode || 200;\n  output = resp.body || {};\n} catch (err) {\n  httpStatus = err.statusCode || 500;\n  output = { error: err.message };\n}\n\nconst duration_ms = Date.now() - t0;\nconst status = (httpStatus >= 200 && httpStatus < 300) ? 'success' : 'error';\n\nreturn [{ json: {\n  agent_id:      ctx.agent,\n  action:        ctx.action,\n  input:         ctx.payload,\n  output:        { httpStatus, body: output },\n  tier:          ctx.tier || 1,\n  duration_ms,\n  status,\n  error_message: status === 'error' ? JSON.stringify(output) : null\n}}];\n"
+      }
+    },
+
+    {
+      "id": "http-log-agent-action",
+      "name": "HTTP — INSERT agent_logs",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1300, 520],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env['SUPABASE_URL'] }}/rest/v1/agent_logs",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey",        "value": "={{ $env['SUPABASE_SERVICE_KEY'] }}" },
+            { "name": "Authorization", "value": "=Bearer {{ $env['SUPABASE_SERVICE_KEY'] }}" },
+            { "name": "Content-Type",  "value": "application/json" },
+            { "name": "Prefer",        "value": "return=minimal" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ agent_id: $json.agent_id, action: $json.action, input: $json.input, output: $json.output, tier: $json.tier, duration_ms: $json.duration_ms, status: $json.status, error_message: $json.error_message }) }}",
+        "options": { "timeout": 10000 }
+      }
+    }
+  ],
+
+  "connections": {
+    "Webhook — Supabase Events": {
+      "main": [[{ "node": "Code — Router Karim", "type": "main", "index": 0 }]]
+    },
+    "Cron — Omar 23h00": {
+      "main": [[{ "node": "Code — Prépare Omar", "type": "main", "index": 0 }]]
+    },
+    "Cron — Alex Lundi 08h00": {
+      "main": [[{ "node": "Code — Prépare Alex Prospection", "type": "main", "index": 0 }]]
+    },
+    "Code — Router Karim": {
+      "main": [[{ "node": "IF — Skip ?", "type": "main", "index": 0 }]]
+    },
+    "Code — Prépare Omar": {
+      "main": [[{ "node": "Code — Appel Agent + Contexte Log", "type": "main", "index": 0 }]]
+    },
+    "Code — Prépare Alex Prospection": {
+      "main": [[{ "node": "Code — Appel Agent + Contexte Log", "type": "main", "index": 0 }]]
+    },
+    "IF — Skip ?": {
+      "main": [
+        [{ "node": "No Op — Aucun Agent", "type": "main", "index": 0 }],
+        [{ "node": "Code — Appel Agent + Contexte Log", "type": "main", "index": 0 }]
+      ]
+    },
+    "Code — Appel Agent + Contexte Log": {
+      "main": [[{ "node": "HTTP — INSERT agent_logs", "type": "main", "index": 0 }]]
+    }
+  },
+
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "meta": { "instanceId": "karim-purity-agency" },
+  "pinData": {},
+  "tags": ["karim", "orchestrator", "routing", "tier1", "tier2"]
+}

@@ -1,0 +1,206 @@
+{
+  "name": "03 — Email Parser (APPROVE / REJECT Amir)",
+  "nodes": [
+    {
+      "id": "imap-trigger",
+      "name": "IMAP — Écoute Boîte Amir",
+      "type": "n8n-nodes-base.emailReadImap",
+      "typeVersion": 2,
+      "position": [200, 400],
+      "credentials": {
+        "imap": { "id": "imap-amir", "name": "IMAP Amir" }
+      },
+      "parameters": {
+        "mailbox": "INBOX",
+        "action": "read",
+        "downloadAttachments": false,
+        "options": {
+          "allowUnauthorizedCerts": false,
+          "customEmailConfig": "[\"UNSEEN\", [\"SUBJECT\", \"[TIER 3]\"]]"
+        }
+      },
+      "notes": "Écoute uniquement les emails non lus contenant '[TIER 3]' dans le sujet.\nAlternative : utiliser un webhook Gmail/Outlook via Make/Zapier si IMAP non disponible."
+    },
+
+    {
+      "id": "code-parse-email",
+      "name": "Code — Parse APPROVE / REJECT",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [480, 400],
+      "parameters": {
+        "jsCode": "// ============================================================\n// Parse la réponse email d'Amir pour extraire APPROVE/REJECT + UUID\n// Format attendu dans le corps de la réponse :\n//   APPROVE <uuid>   ou   REJECT <uuid>\n// ============================================================\nconst email = $input.item.json;\nconst subject = (email.subject || '').toUpperCase();\nconst bodyText = (email.text || email.html || '').toUpperCase();\n\n// Regex UUID v4\nconst UUID_REGEX = /[0-9A-F]{8}-[0-9A-F]{4}-4[0-9A-F]{3}-[89AB][0-9A-F]{3}-[0-9A-F]{12}/i;\n\nlet action = null;   // 'APPROVE' | 'REJECT'\nlet uuid   = null;\n\n// 1. Chercher dans le sujet : Re: [TIER 3] APPROVE xxxxx\nif (subject.includes('APPROVE')) action = 'APPROVE';\nif (subject.includes('REJECT'))  action = 'REJECT';\n\n// 2. Chercher dans le corps du message\nif (!action) {\n  if (bodyText.match(/\\bAPPROVE\\b/)) action = 'APPROVE';\n  if (bodyText.match(/\\bREJECT\\b/))  action = 'REJECT';\n}\n\n// 3. Extraire l'UUID — depuis le sujet, puis le corps\nconst uuidInSubject = subject.match(UUID_REGEX);\nconst uuidInBody    = bodyText.match(UUID_REGEX);\nuuid = (uuidInSubject || uuidInBody || [null])[0];\n\n// Également chercher la pattern \"ID escalade : <uuid>\" dans le corps original\nif (!uuid) {\n  const match = (email.text || email.html || '').match(/ID escalade\\s*:\\s*([0-9a-f-]{36})/i);\n  if (match) uuid = match[1];\n}\n\nif (!action || !uuid) {\n  return [{ json: {\n    _skip: true,\n    _reason: 'email_non_parseable',\n    subject: email.subject,\n    from:    email.from\n  }}];\n}\n\nreturn [{ json: {\n  action,\n  uuid,\n  emailFrom:    email.from,\n  emailSubject: email.subject,\n  receivedAt:   new Date().toISOString()\n}}];\n"
+      }
+    },
+
+    {
+      "id": "if-parseable",
+      "name": "IF — Email Parseable ?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [760, 400],
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "loose" },
+          "conditions": [{
+            "id": "cond-skip",
+            "leftValue": "={{ $json._skip }}",
+            "rightValue": true,
+            "operator": { "type": "boolean", "operation": "true" }
+          }],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+
+    {
+      "id": "no-op-skip",
+      "name": "No Op — Email Non Parseable",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [1020, 280],
+      "parameters": {}
+    },
+
+    {
+      "id": "switch-action",
+      "name": "Switch — APPROVE ou REJECT",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [1020, 500],
+      "parameters": {
+        "mode": "rules",
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "strict" },
+                "conditions": [{
+                  "leftValue": "={{ $json.action }}",
+                  "rightValue": "APPROVE",
+                  "operator": { "type": "string", "operation": "equals" }
+                }],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "APPROVE"
+            },
+            {
+              "conditions": {
+                "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "strict" },
+                "conditions": [{
+                  "leftValue": "={{ $json.action }}",
+                  "rightValue": "REJECT",
+                  "operator": { "type": "string", "operation": "equals" }
+                }],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "REJECT"
+            }
+          ]
+        },
+        "fallbackOutput": "none",
+        "options": {}
+      }
+    },
+
+    {
+      "id": "http-call-approve",
+      "name": "HTTP — Appel Webhook APPROVE",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1300, 420],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env['N8N_WEBHOOK_BASE_URL'] }}/webhook/tier3-approve",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [{ "name": "id", "value": "={{ $json.uuid }}" }]
+        },
+        "options": { "timeout": 15000 }
+      }
+    },
+
+    {
+      "id": "http-call-reject",
+      "name": "HTTP — Appel Webhook REJECT",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1300, 580],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env['N8N_WEBHOOK_BASE_URL'] }}/webhook/tier3-reject",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [{ "name": "id", "value": "={{ $json.uuid }}" }]
+        },
+        "options": { "timeout": 15000 }
+      }
+    },
+
+    {
+      "id": "log-email-action",
+      "name": "HTTP — Log Parsing Email",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1560, 500],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env['SUPABASE_URL'] }}/rest/v1/agent_logs",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey",        "value": "={{ $env['SUPABASE_SERVICE_KEY'] }}" },
+            { "name": "Authorization", "value": "=Bearer {{ $env['SUPABASE_SERVICE_KEY'] }}" },
+            { "name": "Content-Type",  "value": "application/json" },
+            { "name": "Prefer",        "value": "return=minimal" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ agent_id: 'karim', action: 'email_parsed_' + $json.action, input: { uuid: $json.uuid, from: $json.emailFrom }, output: $json, tier: 3, duration_ms: 0, status: 'success' }) }}",
+        "options": {}
+      }
+    }
+  ],
+
+  "connections": {
+    "IMAP — Écoute Boîte Amir": {
+      "main": [[{ "node": "Code — Parse APPROVE / REJECT", "type": "main", "index": 0 }]]
+    },
+    "Code — Parse APPROVE / REJECT": {
+      "main": [[{ "node": "IF — Email Parseable ?", "type": "main", "index": 0 }]]
+    },
+    "IF — Email Parseable ?": {
+      "main": [
+        [{ "node": "No Op — Email Non Parseable", "type": "main", "index": 0 }],
+        [{ "node": "Switch — APPROVE ou REJECT", "type": "main", "index": 0 }]
+      ]
+    },
+    "Switch — APPROVE ou REJECT": {
+      "main": [
+        [{ "node": "HTTP — Appel Webhook APPROVE", "type": "main", "index": 0 }],
+        [{ "node": "HTTP — Appel Webhook REJECT",  "type": "main", "index": 0 }]
+      ]
+    },
+    "HTTP — Appel Webhook APPROVE": {
+      "main": [[{ "node": "HTTP — Log Parsing Email", "type": "main", "index": 0 }]]
+    },
+    "HTTP — Appel Webhook REJECT": {
+      "main": [[{ "node": "HTTP — Log Parsing Email", "type": "main", "index": 0 }]]
+    }
+  },
+
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "meta": { "instanceId": "karim-purity-agency" },
+  "pinData": {},
+  "tags": ["karim", "email", "tier3", "imap", "approve", "reject"]
+}

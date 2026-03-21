@@ -1,0 +1,188 @@
+{
+  "name": "02 — Escalation Handler (Tier 3 APPROVE / REJECT)",
+  "nodes": [
+    {
+      "id": "wh-tier3-create",
+      "name": "Webhook — Créer Escalade Tier 3",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [200, 300],
+      "webhookId": "karim-tier3-create",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "tier3-create",
+        "responseMode": "onReceived",
+        "responseData": "noData",
+        "options": {}
+      },
+      "notes": "Appelé par un agent qui nécessite validation Amir.\nBody attendu: { agent_id, action, description, context, content }"
+    },
+
+    {
+      "id": "wh-approve",
+      "name": "Webhook — APPROVE",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [200, 500],
+      "webhookId": "karim-tier3-approve",
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "tier3-approve",
+        "responseMode": "onReceived",
+        "responseData": "noData",
+        "options": {}
+      },
+      "notes": "Lien cliqué depuis l'email par Amir.\nQuery param attendu: ?id=<uuid>"
+    },
+
+    {
+      "id": "wh-reject",
+      "name": "Webhook — REJECT",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [200, 680],
+      "webhookId": "karim-tier3-reject",
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "tier3-reject",
+        "responseMode": "onReceived",
+        "responseData": "noData",
+        "options": {}
+      },
+      "notes": "Lien cliqué depuis l'email par Amir.\nQuery param attendu: ?id=<uuid>"
+    },
+
+    {
+      "id": "code-create-escalation",
+      "name": "Code — Crée Escalade + Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [500, 300],
+      "parameters": {
+        "jsCode": "// ============================================================\n// Tier 3 : création d'une escalade + email à Amir\n// ============================================================\nconst body = $input.item.json.body || $input.item.json;\nconst N8N_BASE = $env['N8N_WEBHOOK_BASE_URL'] || 'http://localhost:5678';\nconst SUPA_URL = $env['SUPABASE_URL'];\nconst SUPA_KEY = $env['SUPABASE_SERVICE_KEY'];\n\n// Valider les champs requis\nconst required = ['agent_id', 'action', 'description'];\nfor (const f of required) {\n  if (!body[f]) throw new Error(`Champ requis manquant : ${f}`);\n}\n\n// 1. INSERT dans escalations\nconst insertResp = await $http.request({\n  method: 'POST',\n  url: `${SUPA_URL}/rest/v1/escalations`,\n  headers: {\n    'apikey': SUPA_KEY,\n    'Authorization': `Bearer ${SUPA_KEY}`,\n    'Content-Type': 'application/json',\n    'Prefer': 'return=representation'\n  },\n  body: {\n    agent_id:    body.agent_id,\n    action:      body.action,\n    description: body.description,\n    context:     body.context  || null,\n    content:     body.content  || null,\n    status:      'pending'\n  },\n  json: true\n});\n\nconst escalation = insertResp.body[0];\nconst uuid = escalation.id;\nconst approveUrl = `${N8N_BASE}/webhook/tier3-approve?id=${uuid}`;\nconst rejectUrl  = `${N8N_BASE}/webhook/tier3-reject?id=${uuid}`;\nconst expiresAt  = escalation.expires_at;\n\n// 2. Corps de l'email Tier 3\nconst emailSubject = `[TIER 3] Action requise — ${body.agent_id} — ${body.action}`;\nconst emailBody = [\n  `Agent : ${body.agent_id}`,\n  `Action : ${body.description}`,\n  ``,\n  `Contexte :`,\n  body.context || '(aucun contexte fourni)',\n  ``,\n  body.content ? `Contenu :\\n${body.content}\\n` : '',\n  `→ APPROUVER : ${approveUrl}`,\n  `→ REJETER   : ${rejectUrl}`,\n  ``,\n  `ID escalade : ${uuid}`,\n  `Expiration  : 24h (${expiresAt})`\n].join('\\n');\n\n// 3. Log création\nconst logT0 = Date.now();\nawait $http.request({\n  method: 'POST',\n  url: `${SUPA_URL}/rest/v1/agent_logs`,\n  headers: {\n    'apikey': SUPA_KEY,\n    'Authorization': `Bearer ${SUPA_KEY}`,\n    'Content-Type': 'application/json',\n    'Prefer': 'return=minimal'\n  },\n  body: {\n    agent_id:    'karim',\n    action:      'tier3_escalation_created',\n    input:       { escalation_id: uuid, agent_id: body.agent_id, action: body.action },\n    output:      { uuid, approveUrl, rejectUrl },\n    tier:        3,\n    duration_ms: Date.now() - logT0,\n    status:      'pending'\n  },\n  json: true\n});\n\nreturn [{ json: {\n  escalation_id: uuid,\n  emailSubject,\n  emailBody,\n  approveUrl,\n  rejectUrl,\n  expiresAt,\n  agent_id: body.agent_id,\n  action:   body.action\n}}];\n"
+      }
+    },
+
+    {
+      "id": "email-send-amir",
+      "name": "Email — Envoyer Tier 3 à Amir",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [800, 300],
+      "parameters": {
+        "fromEmail": "={{ $env['EMAIL_FROM'] }}",
+        "toEmail":   "={{ $env['AMIR_EMAIL'] }}",
+        "subject":   "={{ $json.emailSubject }}",
+        "text":      "={{ $json.emailBody }}",
+        "options": {}
+      }
+    },
+
+    {
+      "id": "code-resolve-approve",
+      "name": "Code — Résoudre APPROVE",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [500, 500],
+      "parameters": {
+        "jsCode": "// ============================================================\n// Tier 3 : résolution APPROVE\n// ============================================================\nconst uuid = $input.item.json.query?.id || $input.item.json.id;\nif (!uuid) throw new Error('Paramètre ?id manquant dans la requête APPROVE');\n\nconst SUPA_URL = $env['SUPABASE_URL'];\nconst SUPA_KEY = $env['SUPABASE_SERVICE_KEY'];\n\n// Récupérer l'escalade\nconst getResp = await $http.request({\n  method: 'GET',\n  url: `${SUPA_URL}/rest/v1/escalations?id=eq.${uuid}&select=*`,\n  headers: { 'apikey': SUPA_KEY, 'Authorization': `Bearer ${SUPA_KEY}` },\n  json: true\n});\nconst esc = getResp.body[0];\nif (!esc) throw new Error(`Escalade introuvable : ${uuid}`);\nif (esc.status !== 'pending') throw new Error(`Escalade déjà résolue (${esc.status}) : ${uuid}`);\nif (new Date(esc.expires_at) < new Date()) throw new Error(`Escalade expirée : ${uuid}`);\n\n// Mettre à jour le statut\nawait $http.request({\n  method: 'PATCH',\n  url: `${SUPA_URL}/rest/v1/escalations?id=eq.${uuid}`,\n  headers: {\n    'apikey': SUPA_KEY,\n    'Authorization': `Bearer ${SUPA_KEY}`,\n    'Content-Type': 'application/json',\n    'Prefer': 'return=minimal'\n  },\n  body: { status: 'approved', resolved_at: new Date().toISOString(), resolved_by: 'amir_email' },\n  json: true\n});\n\n// Log\nawait $http.request({\n  method: 'POST',\n  url: `${SUPA_URL}/rest/v1/agent_logs`,\n  headers: {\n    'apikey': SUPA_KEY, 'Authorization': `Bearer ${SUPA_KEY}`,\n    'Content-Type': 'application/json', 'Prefer': 'return=minimal'\n  },\n  body: {\n    agent_id: 'karim', action: 'tier3_escalation_approved',\n    input: { escalation_id: uuid },\n    output: { agent_id: esc.agent_id, action: esc.action, resolved_by: 'amir_email' },\n    tier: 3, duration_ms: 0, status: 'success'\n  },\n  json: true\n});\n\n// Notifier l'agent d'origine\nconst N8N_BASE = $env['N8N_WEBHOOK_BASE_URL'] || 'http://localhost:5678';\nawait $http.request({\n  method: 'POST',\n  url: `${N8N_BASE}/webhook/agent-${esc.agent_id}-resume`,\n  body: { escalation_id: uuid, status: 'approved', action: esc.action, context: esc.context },\n  json: true\n}).catch(() => {});\n\nreturn [{ json: { success: true, escalation_id: uuid, status: 'approved', agent: esc.agent_id } }];\n"
+      }
+    },
+
+    {
+      "id": "code-resolve-reject",
+      "name": "Code — Résoudre REJECT",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [500, 680],
+      "parameters": {
+        "jsCode": "// ============================================================\n// Tier 3 : résolution REJECT\n// ============================================================\nconst uuid = $input.item.json.query?.id || $input.item.json.id;\nif (!uuid) throw new Error('Paramètre ?id manquant dans la requête REJECT');\n\nconst SUPA_URL = $env['SUPABASE_URL'];\nconst SUPA_KEY = $env['SUPABASE_SERVICE_KEY'];\n\n// Récupérer l'escalade\nconst getResp = await $http.request({\n  method: 'GET',\n  url: `${SUPA_URL}/rest/v1/escalations?id=eq.${uuid}&select=*`,\n  headers: { 'apikey': SUPA_KEY, 'Authorization': `Bearer ${SUPA_KEY}` },\n  json: true\n});\nconst esc = getResp.body[0];\nif (!esc) throw new Error(`Escalade introuvable : ${uuid}`);\nif (esc.status !== 'pending') throw new Error(`Escalade déjà résolue (${esc.status}) : ${uuid}`);\n\n// Mettre à jour le statut\nawait $http.request({\n  method: 'PATCH',\n  url: `${SUPA_URL}/rest/v1/escalations?id=eq.${uuid}`,\n  headers: {\n    'apikey': SUPA_KEY,\n    'Authorization': `Bearer ${SUPA_KEY}`,\n    'Content-Type': 'application/json',\n    'Prefer': 'return=minimal'\n  },\n  body: { status: 'rejected', resolved_at: new Date().toISOString(), resolved_by: 'amir_email' },\n  json: true\n});\n\n// Log\nawait $http.request({\n  method: 'POST',\n  url: `${SUPA_URL}/rest/v1/agent_logs`,\n  headers: {\n    'apikey': SUPA_KEY, 'Authorization': `Bearer ${SUPA_KEY}`,\n    'Content-Type': 'application/json', 'Prefer': 'return=minimal'\n  },\n  body: {\n    agent_id: 'karim', action: 'tier3_escalation_rejected',\n    input: { escalation_id: uuid },\n    output: { agent_id: esc.agent_id, action: esc.action, resolved_by: 'amir_email' },\n    tier: 3, duration_ms: 0, status: 'success'\n  },\n  json: true\n});\n\n// Notifier l'agent d'origine de l'annulation\nconst N8N_BASE = $env['N8N_WEBHOOK_BASE_URL'] || 'http://localhost:5678';\nawait $http.request({\n  method: 'POST',\n  url: `${N8N_BASE}/webhook/agent-${esc.agent_id}-resume`,\n  body: { escalation_id: uuid, status: 'rejected', action: esc.action, context: esc.context },\n  json: true\n}).catch(() => {});\n\nreturn [{ json: { success: true, escalation_id: uuid, status: 'rejected', agent: esc.agent_id } }];\n"
+      }
+    },
+
+    {
+      "id": "respond-approve",
+      "name": "Respond — APPROVE OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [800, 500],
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "✅ Action APPROUVÉE par Amir. L'agent reprend son exécution.",
+        "options": { "responseCode": 200 }
+      }
+    },
+
+    {
+      "id": "respond-reject",
+      "name": "Respond — REJECT OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [800, 680],
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "❌ Action REJETÉE par Amir. L'escalade est annulée.",
+        "options": { "responseCode": 200 }
+      }
+    },
+
+    {
+      "id": "cron-expire-escalations",
+      "name": "Cron — Expirer Escalades (toutes les heures)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [200, 880],
+      "parameters": {
+        "rule": {
+          "interval": [{ "field": "cronExpression", "expression": "0 * * * *" }]
+        }
+      }
+    },
+
+    {
+      "id": "code-expire-escalations",
+      "name": "Code — Expire Escalades",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [500, 880],
+      "parameters": {
+        "jsCode": "// Marque les escalades expirées\nconst SUPA_URL = $env['SUPABASE_URL'];\nconst SUPA_KEY = $env['SUPABASE_SERVICE_KEY'];\n\nconst resp = await $http.request({\n  method: 'PATCH',\n  url: `${SUPA_URL}/rest/v1/escalations?status=eq.pending&expires_at=lt.${new Date().toISOString()}`,\n  headers: {\n    'apikey': SUPA_KEY,\n    'Authorization': `Bearer ${SUPA_KEY}`,\n    'Content-Type': 'application/json',\n    'Prefer': 'return=representation'\n  },\n  body: { status: 'expired', resolved_at: new Date().toISOString(), resolved_by: 'system_cron' },\n  json: true\n});\n\nconst expired = resp.body || [];\nif (expired.length > 0) {\n  await $http.request({\n    method: 'POST',\n    url: `${SUPA_URL}/rest/v1/agent_logs`,\n    headers: {\n      'apikey': SUPA_KEY, 'Authorization': `Bearer ${SUPA_KEY}`,\n      'Content-Type': 'application/json', 'Prefer': 'return=minimal'\n    },\n    body: {\n      agent_id: 'karim', action: 'tier3_escalations_expired',\n      input: {}, output: { count: expired.length, ids: expired.map(e => e.id) },\n      tier: 3, duration_ms: 0, status: 'success'\n    },\n    json: true\n  });\n}\n\nreturn [{ json: { expired_count: expired.length, timestamp: new Date().toISOString() } }];\n"
+      }
+    }
+  ],
+
+  "connections": {
+    "Webhook — Créer Escalade Tier 3": {
+      "main": [[{ "node": "Code — Crée Escalade + Email", "type": "main", "index": 0 }]]
+    },
+    "Code — Crée Escalade + Email": {
+      "main": [[{ "node": "Email — Envoyer Tier 3 à Amir", "type": "main", "index": 0 }]]
+    },
+    "Webhook — APPROVE": {
+      "main": [[{ "node": "Code — Résoudre APPROVE", "type": "main", "index": 0 }]]
+    },
+    "Code — Résoudre APPROVE": {
+      "main": [[{ "node": "Respond — APPROVE OK", "type": "main", "index": 0 }]]
+    },
+    "Webhook — REJECT": {
+      "main": [[{ "node": "Code — Résoudre REJECT", "type": "main", "index": 0 }]]
+    },
+    "Code — Résoudre REJECT": {
+      "main": [[{ "node": "Respond — REJECT OK", "type": "main", "index": 0 }]]
+    },
+    "Cron — Expirer Escalades (toutes les heures)": {
+      "main": [[{ "node": "Code — Expire Escalades", "type": "main", "index": 0 }]]
+    }
+  },
+
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "meta": { "instanceId": "karim-purity-agency" },
+  "pinData": {},
+  "tags": ["karim", "tier3", "escalation", "approve", "reject"]
+}
